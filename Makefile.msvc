@@ -61,6 +61,7 @@ OURCXXFLAGS=$(OURCXXFLAGS) $(BUILDCXXFLAGS)
 OURCPPFLAGS=$(OURCPPFLAGS) $(BUILDCPPFLAGS)
 OURLIBS=$(OURLIBS) $(BUILDLIBS)
 
+# mmulti_vnet.c is built as its stub here (USE_VNET is not defined): -relay is refused.
 ENGINEOBJS=$(SRC)\a-c.$o \
 	$(SRC)\asmprot.$o \
 	$(SRC)\baselayer.$o \
@@ -71,6 +72,7 @@ ENGINEOBJS=$(SRC)\a-c.$o \
 	$(SRC)\engine.$o \
 	$(SRC)\kplib.$o \
 	$(SRC)\mmulti.$o \
+	$(SRC)\mmulti_vnet.$o \
 	$(SRC)\osd.$o \
 	$(SRC)\pragmas.$o \
 	$(SRC)\scriptfile.$o \
