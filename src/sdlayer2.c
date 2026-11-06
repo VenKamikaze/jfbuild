@@ -96,16 +96,19 @@ static void loadappicon(void);
 // toframe: 1 = resume at the next animation frame (or after 100 ms if the tab is
 // hidden and the browser has stopped animation frames), 0 = after a timer tick.
 // If the page sets Module.jfswFrameLog to an array, the time of every frame yield
-// is pushed onto it (the frame time test reads that).
+// is pushed onto it (the frame time test reads that); Module.jfswYieldLog likewise
+// gets [entered, woken, running again, toframe] for every yield (ASYNCIFY cost).
 EM_JS(void, jfbuild_browser_message, (const char *title, const char *text), {
 	if (Module.jfswMessage) Module.jfswMessage(UTF8ToString(title), UTF8ToString(text));
 });
 #ifndef JFBUILD_NO_ASYNCIFY   // (only for measuring what ASYNCIFY costs: a build that never yields)
 EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe), {
-	if (toframe && Module.jfswFrameLog) Module.jfswFrameLog.push(performance.now());
+	var enter = performance.now();
+	if (toframe && Module.jfswFrameLog) Module.jfswFrameLog.push(enter);
+	var woke = 0;
 	await new Promise(function (resolve) {
 		var timer = 0;
-		function done() { clearTimeout(timer); resolve(); }
+		function done() { woke = performance.now(); clearTimeout(timer); resolve(); }
 		if (toframe) {
 			timer = setTimeout(done, 100);
 			requestAnimationFrame(done);
@@ -113,14 +116,12 @@ EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe), {
 			timer = setTimeout(done, 0);
 		}
 	});
+	// [entered, woken by the browser, running again]: the last gap is the cost of resuming (rewinding) the stack.
+	if (Module.jfswYieldLog) Module.jfswYieldLog.push([enter, woke, performance.now(), toframe]);
 });
-// Module.jfswNoYield: a benchmarking switch (see doco/browser/02-emscripten-port.md);
-// with it set the game runs flat out and the page is not served until it ends.
-EM_JS(int, jfbuild_browser_noyield, (void), { return Module.jfswNoYield ? 1 : 0; });
 static Uint32 browserlastyield = 0;
 static void browser_yield(int toframe)
 {
-	if (jfbuild_browser_noyield()) return;
 	jfbuild_browser_yield(toframe);
 	browserlastyield = SDL_GetTicks();
 }
