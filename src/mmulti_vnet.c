@@ -35,9 +35,7 @@
 #define JOIN_TIMEOUT_MS    15000   // a joiner that never hears from the master
 #define HOSTLOST_TIMEOUT_MS 10000  // a joiner whose master stops answering
 
-static int hostplayers;      // -host-room N, after clamping
 static int playercap;        // set by the game
-static int wantedflag;
 
 #ifndef USE_VNET
 
@@ -89,6 +87,8 @@ int mmulti_vnet_cycle(int isslave, int silent_ms)
 
 #include "vnet.h"
 
+static int hostplayers;      // -host-room N, after clamping
+static int wantedflag;
 static char optrelay[256];   // the relay address as given
 static char optroom[16];     // -room CODE (upper-cased); "" when hosting
 static int opthost;          // -host-room N, as given
@@ -99,7 +99,7 @@ static int sock = -1;
 static int sockport;
 static int state = MMULTI_VNET_OFF;
 static int errcode;
-static char errmsg[160];
+static char errmsg[240];
 static char roomcode[8];
 static unsigned long long readyat;   // vnet_time() at READY
 static int atexitset;
