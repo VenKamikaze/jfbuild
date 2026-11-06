@@ -64,6 +64,7 @@ static int GetTickCount(void)
 
 #include "build.h"
 #include "mmulti.h"
+#include "mmulti_vnet.h"
 #include "baselayer.h"
 
 #define printf buildprintf
@@ -113,6 +114,7 @@ static void savesnatchhost(int other);
 
 void netuninit (void)
 {
+	mmulti_vnet_close();
 #ifdef _WIN32
 	if (mysock != INVALID_SOCKET) closesocket(mysock);
 	WSACleanup();
@@ -135,6 +137,14 @@ int netinit (int portnum)
 #else
 	unsigned int off = 0, on = 1;
 #endif
+
+	if (mmulti_vnet_wanted()) {
+		// Via a vnet relay (mmulti_vnet.c). Peers are AF_INET 10.0.0.N:port.
+		domain = PF_INET;
+		if (mmulti_vnet_open(portnum)) return 1;
+		domain = PF_UNSPEC;
+		return 0;
+	}
 
 #ifdef _WIN32
 	if (WSAStartup(0x202, &ws) != 0) return(0);
@@ -273,6 +283,8 @@ int netsend (int other, void *dabuf, int bufsiz) //0:buffer full... can't send
 	#endif
 	if (otherhost[other].ss_family == AF_UNSPEC) return(0);
 
+	if (mmulti_vnet_active()) return mmulti_vnet_send(&otherhost[other], dabuf, bufsiz);
+
 	if (otherhost[other].ss_family != domain) {
 #ifdef MMULTI_DEBUG_SENDRECV_WIRE
 		debugprintf("mmulti debug send error: tried sending to a different protocol family\n");
@@ -401,6 +413,18 @@ int netread (int *other, void *dabuf, int bufsiz) //0:no packets in buffer
 {
 	char msg_control[1024];
 	int i;
+
+	if (mmulti_vnet_active()) {
+		if (mmulti_vnet_recv(dabuf, bufsiz, &snatchhost) <= 0) return 0;
+		memset(&snatchreplyfrom4, 0, sizeof(snatchreplyfrom4));
+		memset(&snatchreplyfrom6, 0, sizeof(snatchreplyfrom6));
+		(*other) = myconnectindex;
+		for(i=0;i<MAXPLAYERS;i++) {
+			if (issameaddress((struct sockaddr *)&snatchhost, (struct sockaddr *)&otherhost[i]))
+				{ (*other) = i; break; }
+		}
+		return 1;
+	}
 
 	if (IS_INVALID_SOCKET(mysock)) {
 #ifdef MMULTI_DEBUG_SENDRECV_WIRE
@@ -648,9 +672,17 @@ int initmultiplayersparms(int argc, char const * const argv[])
 	struct sockaddr_storage resolvhost;
 
 	initmultiplayers_reset();
+	mmulti_vnet_reset();
 	danetmode = 255; daindex = 0; danumplayers = 0;
 
 	for (i=0;i<argc;i++) {
+		// -relay HOST:PORT, -host-room N, -room CODE: see mmulti_vnet.h
+		if ((j = mmulti_vnet_optlen(argc, argv, i)) > 0) {
+			if (mmulti_vnet_setopt(argc, argv, i) < 0) return 0;
+			i += j - 1;
+			continue;
+		}
+
 		if (argv[i][0] != '-' && argv[i][0] != '/') continue;
 
 		// -p1234 = Listen port
@@ -696,6 +728,19 @@ int initmultiplayersparms(int argc, char const * const argv[])
 		}
 	}
 
+	if (mmulti_vnet_checkopts() < 0) return 0;
+	if (mmulti_vnet_wanted()) {
+		// A game through a relay is always master/slave (the room creator is
+		// the master, player 0). -host-room N sets the player count.
+		if (danetmode == MMULTI_MODE_P2P) {
+			printf("mmulti error: peer-to-peer mode is not available through a relay\n");
+			return 0;
+		}
+		danetmode = MMULTI_MODE_MS;
+		danumplayers = mmulti_vnet_hostplayers() ? mmulti_vnet_hostplayers() : 2;
+		printf("mmulti: Master-slave mode, through a relay\n");
+	}
+
 	if (!netinit(portnum)) {
 		printf("mmulti error: Could not initialise networking\n");
 		return 0;
@@ -703,8 +748,18 @@ int initmultiplayersparms(int argc, char const * const argv[])
 
 	for(i=0;i<argc;i++)
 	{
+		if ((j = mmulti_vnet_optlen(argc, argv, i)) > 0) {
+			i += j - 1;
+			continue;
+		}
 		if ((argv[i][0] == '-') || (argv[i][0] == '/')) {
 			continue;
+		}
+
+		if (mmulti_vnet_wanted()) {
+			printf("mmulti error: host names cannot be combined with -relay (%s)\n", argv[i]);
+			netuninit();
+			return 0;
 		}
 
 		if (danetmode == MMULTI_MODE_MS && daindex >= 1) {
@@ -742,6 +797,12 @@ int initmultiplayersparms(int argc, char const * const argv[])
 		}
 	}
 
+	if (mmulti_vnet_wanted() && !mmulti_vnet_hostplayers()) {
+		// Joining a room: the master is the room creator, 10.0.0.1.
+		mmulti_vnet_hostaddr(&otherhost[0], portnum);
+		daindex = 1;
+	}
+
 	if ((danetmode == 255) && (daindex)) { danumplayers = 2; danetmode = MMULTI_MODE_MS; } //an IP w/o /n# defaults to /n0
 	if ((danumplayers >= 2) && (daindex) && (danetmode == MMULTI_MODE_MS)) myconnectindex = 1;
 	if (daindex > danumplayers) danumplayers = daindex;
@@ -771,6 +832,15 @@ int initmultiplayersparms(int argc, char const * const argv[])
 int initmultiplayerscycle(void)
 {
 	int i, k, dnetready = 1;
+
+	if (mmulti_vnet_active()) {
+		// Pump the relay; wait until we are in the room, stop if it failed
+		// (the caller looks at mmulti_vnet_state()).
+		i = mmulti_vnet_cycle(networkmode == MMULTI_MODE_MS && myconnectindex != connecthead,
+			lastrecvtims[connecthead] ? GetTickCount() - lastrecvtims[connecthead] : -1);
+		if (i == MMULTI_VNET_FAILED) return 0;
+		if (i != MMULTI_VNET_READY) return 1;
+	}
 
 	getpacket(&i,0);
 

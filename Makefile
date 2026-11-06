@@ -80,6 +80,7 @@ ENGINEOBJS= \
 	$(SRC)/engine.$o \
 	$(SRC)/kplib.$o \
 	$(SRC)/mmulti.$o \
+	$(SRC)/mmulti_vnet.$o \
 	$(SRC)/osd.$o \
 	$(SRC)/pragmas.$o \
 	$(SRC)/scriptfile.$o \
@@ -127,6 +128,36 @@ EDITOROBJS=$(SRC)/build.$o \
 	$(SRC)/config.$o
 
 # Specialise for the platform
+# vnet: the relay transport for mmulti (src/mmulti_vnet.c). Its sources are
+# compiled into the engine library from the vendored copy (a git submodule of
+# the game repository, ../ext/vnet), without CMake. Without that directory
+# (a stand-alone checkout) or with USE_VNET=0 mmulti_vnet.c compiles to stubs
+# and -relay is refused.
+VNETDIR ?= ../ext/vnet
+ifndef USE_VNET
+	ifneq (,$(wildcard $(VNETDIR)/include/vnet.h))
+		USE_VNET=1
+	else
+		USE_VNET=0
+	endif
+endif
+ifeq (1,$(USE_VNET))
+	VNETSRCS=$(wildcard $(VNETDIR)/src/*.c)
+	ENGINEOBJS+= $(patsubst $(VNETDIR)/src/%.c,$(SRC)/vnet-%.$o,$(VNETSRCS))
+	OURCPPFLAGS+= -DUSE_VNET=1 -I$(VNETDIR)/include
+	# vnet's own flags, for its files only (see its doco/integration.md)
+	VNETCFLAGS=-std=c11 -W -Wall -I$(VNETDIR)/include -I$(VNETDIR)/src
+	ifeq ($(PLATFORM),DARWIN)
+		VNETCFLAGS+= -D_DARWIN_C_SOURCE
+	else
+		ifeq ($(PLATFORM),WINDOWS)
+			VNETCFLAGS+= -D_WIN32_WINNT=0x0601 -DWIN32_LEAN_AND_MEAN
+		else
+			VNETCFLAGS+= -D_POSIX_C_SOURCE=200809L
+		endif
+	endif
+endif
+
 ifeq ($(PLATFORM),LINUX)
 	NASMFLAGS+= -f elf
 	OURLDFLAGS+= -lm
@@ -214,6 +245,9 @@ bin2c$(EXESUFFIX): $(TOOLS)/bin2c.cc
 include Makefile.deps
 
 # RULES
+$(SRC)/vnet-%.$o: $(VNETDIR)/src/%.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(VNETCFLAGS) -g -c $< -o $@
+
 $(SRC)/%.$o: $(SRC)/%.$(asm)
 	$(NASM) $(NASMFLAGS) $< -o $@
 

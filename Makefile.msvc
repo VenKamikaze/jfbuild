@@ -71,6 +71,7 @@ ENGINEOBJS=$(SRC)\a-c.$o \
 	$(SRC)\engine.$o \
 	$(SRC)\kplib.$o \
 	$(SRC)\mmulti.$o \
+	$(SRC)\mmulti_vnet.$o \
 	$(SRC)\osd.$o \
 	$(SRC)\pragmas.$o \
 	$(SRC)\scriptfile.$o \
