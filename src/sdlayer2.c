@@ -97,6 +97,10 @@ static void loadappicon(void);
 // hidden and the browser has stopped animation frames), 0 = after a timer tick.
 // If the page sets Module.jfswFrameLog to an array, the time of every frame yield
 // is pushed onto it (the frame time test reads that).
+EM_JS(void, jfbuild_browser_message, (const char *title, const char *text), {
+	if (Module.jfswMessage) Module.jfswMessage(UTF8ToString(title), UTF8ToString(text));
+});
+#ifndef JFBUILD_NO_ASYNCIFY   // (only for measuring what ASYNCIFY costs: a build that never yields)
 EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe), {
 	if (toframe && Module.jfswFrameLog) Module.jfswFrameLog.push(performance.now());
 	await new Promise(function (resolve) {
@@ -110,15 +114,20 @@ EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe), {
 		}
 	});
 });
-EM_JS(void, jfbuild_browser_message, (const char *title, const char *text), {
-	if (Module.jfswMessage) Module.jfswMessage(UTF8ToString(title), UTF8ToString(text));
-});
+// Module.jfswNoYield: a benchmarking switch (see doco/browser/02-emscripten-port.md);
+// with it set the game runs flat out and the page is not served until it ends.
+EM_JS(int, jfbuild_browser_noyield, (void), { return Module.jfswNoYield ? 1 : 0; });
 static Uint32 browserlastyield = 0;
 static void browser_yield(int toframe)
 {
+	if (jfbuild_browser_noyield()) return;
 	jfbuild_browser_yield(toframe);
 	browserlastyield = SDL_GetTicks();
 }
+#else
+static Uint32 browserlastyield = 0;
+static void browser_yield(int toframe) { (void)toframe; }
+#endif
 #endif
 
 int wm_msgbox(const char *name, const char *fmt, ...)
