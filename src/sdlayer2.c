@@ -19,6 +19,10 @@
 #include <stdlib.h>
 #include <math.h>
 
+#ifdef __EMSCRIPTEN__
+# include <emscripten.h>
+#endif
+
 #include "baselayer_priv.h"
 #include "sdlayer.h"
 #include "cache1d.h"
@@ -82,6 +86,51 @@ static void shutdownvideo(void);
 
 static void loadappicon(void);
 
+#ifdef __EMSCRIPTEN__
+// Running in a browser. The game's loops block (they poll handleevents() and the
+// clock and never sleep), so under Emscripten's ASYNCIFY they must hand control
+// back to the browser now and then or the page freezes. These are the only places
+// that do it: showframe() once per presented frame, paced to the display with
+// requestAnimationFrame, and handleevents() for loops that wait without drawing.
+//
+// toframe: 1 = resume at the next animation frame (or after 100 ms if the tab is
+// hidden and the browser has stopped animation frames), 0 = after a timer tick.
+// If the page sets Module.jfswFrameLog to an array, the time of every frame yield
+// is pushed onto it (the frame time test reads that); Module.jfswYieldLog likewise
+// gets [entered, woken, running again, toframe] for every yield (ASYNCIFY cost).
+EM_JS(void, jfbuild_browser_message, (const char *title, const char *text), {
+	if (Module.jfswMessage) Module.jfswMessage(UTF8ToString(title), UTF8ToString(text));
+});
+#ifndef JFBUILD_NO_ASYNCIFY   // (only for measuring what ASYNCIFY costs: a build that never yields)
+EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe), {
+	var enter = performance.now();
+	if (toframe && Module.jfswFrameLog) Module.jfswFrameLog.push(enter);
+	var woke = 0;
+	await new Promise(function (resolve) {
+		var timer = 0;
+		function done() { woke = performance.now(); clearTimeout(timer); resolve(); }
+		if (toframe) {
+			timer = setTimeout(done, 100);
+			requestAnimationFrame(done);
+		} else {
+			timer = setTimeout(done, 0);
+		}
+	});
+	// [entered, woken by the browser, running again]: the last gap is the cost of resuming (rewinding) the stack.
+	if (Module.jfswYieldLog) Module.jfswYieldLog.push([enter, woke, performance.now(), toframe]);
+});
+static Uint32 browserlastyield = 0;
+static void browser_yield(int toframe)
+{
+	jfbuild_browser_yield(toframe);
+	browserlastyield = SDL_GetTicks();
+}
+#else
+static Uint32 browserlastyield = 0;
+static void browser_yield(int toframe) { (void)toframe; }
+#endif
+#endif
+
 int wm_msgbox(const char *name, const char *fmt, ...)
 {
 	char *buf = NULL;
@@ -101,6 +150,14 @@ int wm_msgbox(const char *name, const char *fmt, ...)
 	do {
 		rv = 0;
 
+#ifdef __EMSCRIPTEN__
+		// SDL's message box is a bare alert() here. Print the text, and let the page
+		// show it (it is usually the reason the game is about to exit).
+		puts(buf);
+		jfbuild_browser_message(name, buf);
+		rv = 1;
+		break;
+#endif
 #if defined(HAVE_GTK)
 		if (wmgtk_msgbox(name, buf) >= 0) {
 			rv = 1;
@@ -342,6 +399,10 @@ int initsystem(void)
 	}
 
 	OSD_RegisterFunction("glswapinterval", "glswapinterval: frame swap interval for OpenGL modes. 0 = no vsync, -1 = adaptive, max 8", set_glswapinterval);
+#endif
+#ifdef __EMSCRIPTEN__
+	// A WebGL texture is much faster than the window surface (a 2D canvas copy).
+	usesdlrenderer = 1;
 #endif
 	if (getenv("BUILD_USESDLRENDERER")) {
 		buildputs("Will use SDL renderer if OpenGL is not available.\n");
@@ -639,6 +700,14 @@ void sampletimer(void)
 	if (!timerfreq) return;
 
 	n = (int)(SDL_GetPerformanceCounter() * timerticspersec / timerfreq) - timerlastsample;
+#ifdef __EMSCRIPTEN__
+	// A hidden or throttled tab can go without running for seconds. Treat anything
+	// over a quarter of a second as a pause instead of replaying it as game time.
+	if (n > (int)(timerticspersec / 4)) {
+		timerlastsample += n - timerticspersec / 4;
+		n = timerticspersec / 4;
+	}
+#endif
 	if (n>0) {
 		totalclock += n;
 		timerlastsample += n;
@@ -813,6 +882,11 @@ int setvideomode(int xdim, int ydim, int bitspp, int fullsc)
 	unsigned refresh=0;
 	const char *str;
 
+#ifdef __EMSCRIPTEN__
+	// The canvas is always a window; going fullscreen is up to the page.
+	fullsc = 0;
+#endif
+
 	if ((fullsc == fullscreen) && (xdim == xres) && (ydim == yres) && (bitspp == bpp) && !videomodereset) {
 		OSD_ResizeDisplay(xres,yres);
 		return 0;
@@ -915,8 +989,17 @@ int setvideomode(int xdim, int ydim, int bitspp, int fullsc)
 			if (usesdlrenderer) {
 				// 8-bit software with no GL shader blitting goes via the SDL rendering apparatus.
 				SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+#ifdef __EMSCRIPTEN__
+				// showframe() yields to the browser itself, paced to animation frames.
+				SDL_SetHint(SDL_HINT_EMSCRIPTEN_ASYNCIFY, "0");
+#endif
 
+#ifdef __EMSCRIPTEN__
+				// Frames are paced by showframe() (requestAnimationFrame), not by SDL.
+				sdl_renderer = SDL_CreateRenderer(sdl_window, -1, 0);
+#else
 				sdl_renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_PRESENTVSYNC);
+#endif
 				if (!sdl_renderer) {
 					buildprintf("Error creating renderer: %s\n", SDL_GetError());
 					return -1;
@@ -1152,6 +1235,10 @@ void showframe(void)
 		}
 		SDL_UpdateWindowSurface(sdl_window);
 	}
+
+#ifdef __EMSCRIPTEN__
+	browser_yield(1);
+#endif
 }
 
 
@@ -1262,6 +1349,12 @@ int handleevents(void)
 	SDL_Event ev;
 	static int firstcall = 1;
 	int eattextinput = 0;
+
+#ifdef __EMSCRIPTEN__
+	// Loops that wait without drawing (menus' delays, the intro movie, waiting for
+	// players) get here without passing showframe(): give the browser a turn.
+	if (SDL_GetTicks() - browserlastyield >= 8) browser_yield(0);
+#endif
 
 	while (SDL_PollEvent(&ev)) {
 		switch (ev.type) {

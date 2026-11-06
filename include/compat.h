@@ -141,6 +141,12 @@ typedef unsigned __int64 uint64_t;
 # define B_LITTLE_ENDIAN 1
 # define B_BIG_ENDIAN    0
 # define B_ENDIAN_C_INLINE 1
+
+#elif defined(__EMSCRIPTEN__)
+// WebAssembly is little endian.
+# define B_LITTLE_ENDIAN 1
+# define B_BIG_ENDIAN    0
+# define B_ENDIAN_C_INLINE 1
 #endif
 
 #if !defined(B_LITTLE_ENDIAN) || !defined(B_BIG_ENDIAN)
