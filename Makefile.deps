@@ -17,7 +17,7 @@ $(SRC)/hightile.$o: $(SRC)/hightile.c $(INC)/build.h $(INC)/compat.h $(SRC)/kpli
 $(SRC)/kplib.$o: $(SRC)/kplib.c
 $(SRC)/mdsprite.$o: $(SRC)/mdsprite.c $(INC)/build.h $(INC)/compat.h $(INC)/glbuild.h $(SRC)/kplib.h $(INC)/pragmas.h $(INC)/cache1d.h $(INC)/baselayer.h $(INC)/crc32.h $(SRC)/engine_priv.h $(SRC)/polymost_priv.h $(SRC)/glbuild_priv.h $(SRC)/glext.h $(SRC)/hightile_priv.h $(SRC)/polymosttex_priv.h $(SRC)/mdsprite_priv.h
 $(SRC)/mmulti.$o: $(SRC)/mmulti.c $(INC)/build.h $(INC)/compat.h $(INC)/mmulti.h $(INC)/baselayer.h $(INC)/mmulti_vnet.h
-$(SRC)/mmulti_vnet.$o: $(SRC)/mmulti_vnet.c $(INC)/build.h $(INC)/compat.h $(INC)/mmulti.h $(INC)/mmulti_vnet.h
+$(SRC)/mmulti_vnet.$o: $(SRC)/mmulti_vnet.c $(INC)/build.h $(INC)/compat.h $(INC)/mmulti.h $(INC)/mmulti_vnet.h $(wildcard $(VNETDIR)/include/vnet.h)
 $(SRC)/mmulti_null.$o: $(SRC)/mmulti_null.c $(INC)/mmulti.h
 $(SRC)/osd.$o: $(SRC)/osd.c $(INC)/build.h $(INC)/compat.h $(INC)/osd.h $(INC)/baselayer.h
 $(SRC)/polymost.$o: $(SRC)/polymost.c $(INC)/build.h $(INC)/compat.h $(INC)/glbuild.h $(INC)/pragmas.h $(INC)/baselayer.h $(SRC)/baselayer_priv.h $(INC)/osd.h $(SRC)/engine_priv.h $(SRC)/polymost_priv.h $(SRC)/glbuild_priv.h $(SRC)/glext.h $(SRC)/hightile_priv.h $(SRC)/polymosttex_priv.h $(SRC)/polymosttexcache.h $(SRC)/mdsprite_priv.h

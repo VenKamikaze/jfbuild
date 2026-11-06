@@ -733,7 +733,7 @@ int initmultiplayersparms(int argc, char const * const argv[])
 		// A game through a relay is always master/slave (the room creator is
 		// the master, player 0). -host-room N sets the player count.
 		if (danetmode == MMULTI_MODE_P2P) {
-			printf("mmulti error: peer-to-peer mode is not available through a relay\n");
+			mmulti_vnet_fail("peer-to-peer mode is not available through a relay");
 			return 0;
 		}
 		danetmode = MMULTI_MODE_MS;
@@ -757,7 +757,7 @@ int initmultiplayersparms(int argc, char const * const argv[])
 		}
 
 		if (mmulti_vnet_wanted()) {
-			printf("mmulti error: host names cannot be combined with -relay (%s)\n", argv[i]);
+			mmulti_vnet_fail("host names cannot be combined with -relay (%s)", argv[i]);
 			netuninit();
 			return 0;
 		}

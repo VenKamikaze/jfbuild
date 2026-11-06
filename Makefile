@@ -245,7 +245,7 @@ bin2c$(EXESUFFIX): $(TOOLS)/bin2c.cc
 include Makefile.deps
 
 # RULES
-$(SRC)/vnet-%.$o: $(VNETDIR)/src/%.c
+$(SRC)/vnet-%.$o: $(VNETDIR)/src/%.c $(VNETDIR)/include/vnet.h $(wildcard $(VNETDIR)/src/*.h)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(VNETCFLAGS) -g -c $< -o $@
 
 $(SRC)/%.$o: $(SRC)/%.$(asm)

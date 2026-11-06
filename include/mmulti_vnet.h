@@ -12,10 +12,10 @@
 //                       "udp://HOST:PORT" is accepted too. A ws:// or wss://
 //                       URL is the browser's form and is refused natively.
 //   -host-room N        create a room and be the master (player 0, 10.0.0.1)
-//                       of an N player game. N is 2 up to what the game
-//                       allows (4 on the shareware GRP, 8 on registered) and
-//                       what the relay allows per room; a larger N is clamped
-//                       with a message once those limits are known.
+//                       of an N player game. N is 2 to 8; the game allows 4
+//                       on the shareware GRP and 8 on registered, and the
+//                       relay has a room size of its own: a larger N is
+//                       clamped with a message once those limits are known.
 //   -room CODE          join the room CODE as a slave, taking an open slot as
 //                       a newcomer does on plain UDP.
 //   -p PORT             (as before) the port inside the room, default 0x5bd9.
@@ -76,6 +76,11 @@ int mmulti_vnet_hostplayers(void);
 int mmulti_vnet_wanted(void);
 int mmulti_vnet_active(void);
 
+// Report an error in how a relay game was asked for: prints "mmulti error: ...",
+// sets the FAILED state (so that the game exits 1 instead of playing single
+// player) and returns -1.
+int mmulti_vnet_fail(const char *fmt, ...);
+
 // Reset the option state; called at the start of initmultiplayersparms.
 void mmulti_vnet_reset(void);
 
@@ -91,6 +96,7 @@ int mmulti_vnet_checkopts(void);
 
 // Create the relay context and open the game socket on PORT. 1 or 0.
 int mmulti_vnet_open(int port);
+// Close the relay session (the state goes back to OFF unless it FAILED).
 void mmulti_vnet_close(void);
 
 // The address of the room creator, 10.0.0.1:PORT, as an AF_INET sockaddr.

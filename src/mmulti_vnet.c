@@ -32,10 +32,13 @@
 #define printf buildprintf
 
 #define DEFAULT_RELAY_PORT 7777
+#define MAXROOMPLAYERS 8           // the most the game has (registered GRP)
 #define JOIN_TIMEOUT_MS    15000   // a joiner that never hears from the master
 #define HOSTLOST_TIMEOUT_MS 10000  // a joiner whose master stops answering
 
 static int playercap;        // set by the game
+
+#include <stdarg.h>
 
 #ifndef USE_VNET
 
@@ -47,6 +50,17 @@ static int stubfail(void)
 	stubfailed = 1;
 	snprintf(stubmsg, sizeof(stubmsg), "this build has no relay support (vnet was not built in)");
 	printf("mmulti error: %s\n", stubmsg);
+	return -1;
+}
+
+int mmulti_vnet_fail(const char *fmt, ...)
+{
+	va_list va;
+	va_start(va, fmt);
+	vsnprintf(stubmsg, sizeof(stubmsg), fmt, va);
+	va_end(va);
+	printf("mmulti error: %s\n", stubmsg);
+	stubfailed = 1;
 	return -1;
 }
 
@@ -104,11 +118,9 @@ static char roomcode[8];
 static unsigned long long readyat;   // vnet_time() at READY
 static int atexitset;
 
-#include <stdarg.h>
-
 // An argument or start-up error: say so, and remember it (state FAILED) so
 // that the game can tell a bad -relay start from a plain -net failure.
-static int optfail(const char *fmt, ...)
+int mmulti_vnet_fail(const char *fmt, ...)
 {
 	char msg[200];
 	va_list va;
@@ -122,6 +134,8 @@ static int optfail(const char *fmt, ...)
 	snprintf(errmsg, sizeof(errmsg), "%s", msg);
 	return -1;
 }
+
+#define optfail mmulti_vnet_fail
 
 static int streq_ci(const char *a, const char *b)
 {
@@ -138,7 +152,13 @@ int mmulti_vnet_state(void) { return state; }
 const char *mmulti_vnet_roomcode(void) { return roomcode; }
 int mmulti_vnet_error(void) { return errcode; }
 const char *mmulti_vnet_errormsg(void) { return errmsg; }
-void mmulti_vnet_setplayercap(int cap) { playercap = cap; }
+static void clampplayers(void);
+
+void mmulti_vnet_setplayercap(int cap)
+{
+	playercap = cap;
+	if (state == MMULTI_VNET_READY && !optroom[0]) clampplayers();	// already in the room
+}
 int mmulti_vnet_hostplayers(void) { return hostplayers; }
 int mmulti_vnet_wanted(void) { return wantedflag; }
 int mmulti_vnet_active(void) { return ctx != NULL; }
@@ -189,7 +209,8 @@ int mmulti_vnet_setopt(int argc, char const * const argv[], int i)
 		}
 		for (n = 0; n < 6; n++) {
 			char c = val[n];
-			if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '2' && c <= '9'))) {
+			if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '2' && c <= '9')) ||
+					c == 'I' || c == 'i' || c == 'O' || c == 'o') {
 				return optfail("\"%s\" is not a room code (6 letters and digits, no 0, 1, I or O)", val);
 			}
 			optroom[n] = (char)((c >= 'a' && c <= 'z') ? c - 'a' + 'A' : c);
@@ -199,9 +220,9 @@ int mmulti_vnet_setopt(int argc, char const * const argv[], int i)
 	} else {
 		char *p;
 		long l = strtol(val, &p, 10);
-		if (*p || l < 2 || l > MAXMULTIPLAYERS) {
-			return optfail("-host-room needs a number of players from 2 to %d, not \"%s\"",
-				MAXMULTIPLAYERS, val);
+		if (*p || l < 2 || l > MAXROOMPLAYERS) {
+			return optfail("-host-room needs a number of players from 2 to %d (4 with the shareware GRP), not \"%s\"",
+				MAXROOMPLAYERS, val);
 		}
 		opthost = (int)l;
 		sawhost = 1;
@@ -270,7 +291,7 @@ int mmulti_vnet_open(int port)
 		snprintf(hostport, sizeof(hostport), "%s", optrelay);
 	rc = vnet_resolve_host(hostport, VNET_FAMILY_ANY, &relay);
 	if (rc < 0 || vnet_addr_to_string(&relay, numeric, sizeof(numeric)) < 0) {
-		optfail("cannot resolve the relay address %s (%s)", hostport, vnet_strerror(rc < 0 ? rc : VNET_EINVAL));
+		optfail("cannot resolve relay host %s (%s)", hostport, vnet_strerror(rc < 0 ? rc : VNET_EINVAL));
 		return 0;
 	}
 
@@ -313,6 +334,7 @@ void mmulti_vnet_close(void)
 	}
 	ctx = NULL;
 	sock = -1;
+	if (state != MMULTI_VNET_FAILED) state = MMULTI_VNET_OFF;
 }
 
 void mmulti_vnet_hostaddr(struct sockaddr_storage *out, int port)
@@ -355,6 +377,8 @@ static void pump(void)
 			printf("mmulti: room code %s (you are 10.0.0.%d, %s; the room takes %d players)\n",
 				roomcode, st.self.bytes[3], st.transport, st.max_members);
 		fflush(stdout);	// a launcher reading our output wants the code now
+		// whoever pumps the relay first sees the transition: apply the caps here
+		if (!optroom[0]) clampplayers();
 	}
 }
 
@@ -386,11 +410,7 @@ static void clampplayers(void)
 
 int mmulti_vnet_cycle(int isslave, int silent_ms)
 {
-	int before = state;
-
 	pump();
-	if (state == MMULTI_VNET_READY && before == MMULTI_VNET_CONNECTING && !isslave)
-		clampplayers();
 	if (state == MMULTI_VNET_READY && isslave) {
 		unsigned long long waited = vnet_time(ctx) - readyat;
 		if (silent_ms < 0 && waited > JOIN_TIMEOUT_MS) {
