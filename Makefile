@@ -142,6 +142,11 @@ endif
 ifeq ($(PLATFORM),DARWIN)
 	ENGINEOBJS+= $(SRC)/osxbits.$o
 endif
+ifeq ($(PLATFORM),EMSCRIPTEN)
+	# No BSD sockets in the browser: single player only (mmulti_null.c) until
+	# the vnet-backed mmulti is built for it.
+	ENGINEOBJS:=$(filter-out $(SRC)/mmulti.$o,$(ENGINEOBJS)) $(SRC)/mmulti_null.$o
+endif
 
 # Select the system layer
 ifeq ($(RENDERTYPE),SDL)
