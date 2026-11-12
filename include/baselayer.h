@@ -71,6 +71,7 @@ int handleevents(void);
 //                                     waiting in a yield. Safe to call from a browser event.
 int jfbuild_browser_hidden_netgame(void);
 void jfbuild_browser_wake(void);
+void jfbuild_browser_kick(void);     // ask for another hidden pass at once (data is waiting for mmulti's send window)
 #endif
 
 int initinput(void);

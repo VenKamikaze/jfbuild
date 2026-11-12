@@ -108,7 +108,8 @@ EM_JS(void, jfbuild_browser_message, (const char *title, const char *text), {
 // instead: the vnet wake callback (mmulti_vnet.c) calls jfbuild_browser_wake(), which posts a
 // message on a MessageChannel (messages are not throttled; timers and
 // emscripten_async_call, which is a timer, are) and the handler resumes the game if it is
-// waiting in a hidden yield. A timer tick (and the page becoming visible) resumes it too, for
+// waiting in a hidden yield (the game also sends itself such a message while mmulti holds data
+// back, see jfbuild_browser_kick). A timer tick (and the page becoming visible) resumes it too, for
 // vnet's own deadlines, which are not events. A hidden single player game still pauses as
 // before. The wake is ignored while the tab is visible (animation frames drive it then).
 EM_JS(int, jfbuild_browser_hidden, (void), {
@@ -122,13 +123,35 @@ int jfbuild_browser_hidden_netgame(void)
 EM_JS(void, jfbuild_browser_count_frame, (void), {
 	if (Module.jfswShowframes !== undefined) Module.jfswShowframes++;
 });
-EM_JS(void, jfbuild_browser_wake, (void), {
-	if (!Module.jfswChan) {
+// The MessageChannel and the visibilitychange listener are made by the first hidden yield.
+// own = 0: a vnet wake (a test page may thin these out with Module.jfswWakeEvery = N: only every
+// Nth gets through, to imitate a quiet peer); own = 1: the game asking for another pass itself.
+EM_JS(void, jfbuild_browser_post, (int own), {
+	if (!Module.jfswChan) return;
+	if (!own) {
+		if (Module.jfswWakes !== undefined) Module.jfswWakes++;
+		var n = Module.jfswWakeEvery;
+		if (n > 1 && (Module.jfswWakeSeq = (Module.jfswWakeSeq || 0) + 1) % n) return;
+	}
+	if (!Module.jfswWakeQueued) {
+		Module.jfswWakeQueued = true;
+		Module.jfswChan.port2.postMessage(own ? 3 : 1);
+	}
+});
+void jfbuild_browser_wake(void) { jfbuild_browser_post(0); }
+// For the hidden pass: something it made is still waiting for mmulti's 25 ms send window, so
+// run another pass (a message, not a timer: a hidden tab's timers are throttled) until it is out.
+void jfbuild_browser_kick(void) { jfbuild_browser_post(1); }
+#ifndef JFBUILD_NO_ASYNCIFY   // (only for measuring what ASYNCIFY costs: a build that never yields)
+EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe, int hidden, int owed), {
+	var enter = performance.now();
+	if (toframe && !hidden && Module.jfswFrameLog) Module.jfswFrameLog.push(enter);
+	if (hidden && !Module.jfswChan) {
 		var ch = new MessageChannel();
-		ch.port1.onmessage = function () {
+		ch.port1.onmessage = function (e) {
 			Module.jfswWakeQueued = false;
 			var d = Module.jfswPending;
-			if (d) d(1);
+			if (d) d(e.data);
 		};
 		Module.jfswChan = ch;
 		document.addEventListener('visibilitychange', function () {
@@ -136,26 +159,17 @@ EM_JS(void, jfbuild_browser_wake, (void), {
 			if (d) d(2);
 		});
 	}
-	if (Module.jfswWakes !== undefined) Module.jfswWakes++;
-	if (!Module.jfswWakeQueued) {
-		Module.jfswWakeQueued = true;
-		Module.jfswChan.port2.postMessage(0);
-	}
-});
-#ifndef JFBUILD_NO_ASYNCIFY   // (only for measuring what ASYNCIFY costs: a build that never yields)
-EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe, int hidden), {
-	var enter = performance.now();
-	if (toframe && !hidden && Module.jfswFrameLog) Module.jfswFrameLog.push(enter);
 	var woke = 0;
 	await new Promise(function (resolve) {
 		var timer = 0;
 		function done(why) {
 			woke = performance.now(); clearTimeout(timer); Module.jfswPending = null;
 			if (hidden && Module.jfswHiddenLog) Module.jfswHiddenLog.push(why || 0);
+			if (hidden && owed && Module.jfswOwedLog) Module.jfswOwedLog.push(woke - enter);
 			resolve();
 		}
 		if (hidden) {
-			// Hidden tab in a network game: a network event (wake), the page becoming visible, or a timer tick.
+			// Hidden tab in a network game: a network event (wake), our own request (kick), the page becoming visible, or a timer tick.
 			Module.jfswPending = done;
 			timer = setTimeout(done, 250);
 		} else if (toframe) {
@@ -171,7 +185,8 @@ EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe, int hidden), {
 static Uint32 browserlastyield = 0;
 static void browser_yield(int toframe)
 {
-	jfbuild_browser_yield(toframe, jfbuild_browser_hidden_netgame());
+	int hidden = jfbuild_browser_hidden_netgame();
+	jfbuild_browser_yield(toframe, hidden, hidden && mmulti_vnet_sendpending());
 	browserlastyield = SDL_GetTicks();
 }
 #else

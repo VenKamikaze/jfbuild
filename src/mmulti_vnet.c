@@ -91,7 +91,15 @@ int mmulti_vnet_setopt(int argc, char const * const argv[], int i)
 	(void)argc; (void)argv; (void)i;
 	return stubfail();
 }
-int mmulti_vnet_checkopts(void) { return 0; }
+int mmulti_vnet_checkopts(void)
+{
+#ifdef __EMSCRIPTEN__
+	// no sockets in a browser: plain -net cannot work (see the real checkopts below)
+	return mmulti_vnet_fail("a network game in the browser needs a relay, and this build has no relay support (vnet was not built in)");
+#else
+	return 0;
+#endif
+}
 int mmulti_vnet_open(int port) { (void)port; return 0; }
 void mmulti_vnet_close(void) {}
 void mmulti_vnet_hostaddr(struct sockaddr_storage *out, int port) { (void)port; memset(out, 0, sizeof(*out)); }
@@ -203,7 +211,7 @@ int mmulti_vnet_setopt(int argc, char const * const argv[], int i)
 #ifdef __EMSCRIPTEN__
 		// In the browser the relay is reached over WebSocket (and WebTransport, which
 		// vnet derives from a wss:// URL): a UDP address means nothing here.
-		if (strncmp(val, "ws://", 5) && strncmp(val, "wss://", 6)) {
+		if (Bstrncasecmp(val, "ws://", 5) && Bstrncasecmp(val, "wss://", 6)) {
 			return optfail("-relay wants the relay's WebSocket URL in the browser (wss://HOST/vnet, "
 				"or ws://HOST:PORT/vnet for a local one), not %s", val);
 		}
@@ -300,14 +308,15 @@ static void atexit_close(void) { mmulti_vnet_close(); }
 // Test-only knobs, handed over by the page (web/jfsw.js) in Module.jfswKnobs, which
 // the page fills only on a ?test=1 page: relay_wt (an explicit WebTransport URL),
 // relay_cert (the SHA-256 of a relay development certificate, hex) and impair (a
-// vnet impairment spec, with its own seed). Returns the length (0: not given).
+// vnet impairment spec, with its own seed). Returns the length (0: not given, -1: too long).
 EM_JS(int, jfbuild_browser_knob, (const char *name, char *out, int cap), {
 	var k = Module.jfswKnobs;
 	var v = k ? k[UTF8ToString(name)] : 0;
 	if (!v) return 0;
 	var str = String(v);
+	if (lengthBytesUTF8(str) >= cap) return -1;		// too long for the buffer: refused, not cut short
 	stringToUTF8(str, out, cap);
-	return Math.min(lengthBytesUTF8(str), cap - 1);
+	return lengthBytesUTF8(str);
 });
 
 // vnet_config.wake: called from the browser event that queued a datagram or changed
@@ -328,7 +337,7 @@ int mmulti_vnet_open(int port)
 #ifdef __EMSCRIPTEN__
 	char wt[300], cert[100], impair[200];
 	const char *used[3];
-	int nused = 0;
+	int nused = 0, rc;
 #else
 	vnet_addr relay;
 	char hostport[300];
@@ -347,9 +356,12 @@ int mmulti_vnet_open(int port)
 	// told otherwise; AUTO tries WebTransport first and falls back to WebSocket).
 	snprintf(numeric, sizeof(numeric), "%s", optrelay);
 	cfg.relay = numeric;
-	if (jfbuild_browser_knob("relay_wt", wt, sizeof(wt)) > 0) { cfg.relay_wt = wt; used[nused++] = "relay_wt"; }
-	if (jfbuild_browser_knob("relay_cert", cert, sizeof(cert)) > 0) { cfg.relay_cert_sha256 = cert; used[nused++] = "relay_cert"; }
-	if (jfbuild_browser_knob("impair", impair, sizeof(impair)) > 0) {
+	if ((rc = jfbuild_browser_knob("relay_wt", wt, sizeof(wt))) < 0) { optfail("the relay_wt knob is too long (at most %d characters)", (int)sizeof(wt) - 1); return 0; }
+	if (rc > 0) { cfg.relay_wt = wt; used[nused++] = "relay_wt"; }
+	if ((rc = jfbuild_browser_knob("relay_cert", cert, sizeof(cert))) < 0) { optfail("the relay_cert knob is too long"); return 0; }
+	if (rc > 0) { cfg.relay_cert_sha256 = cert; used[nused++] = "relay_cert"; }
+	if ((rc = jfbuild_browser_knob("impair", impair, sizeof(impair))) < 0) { optfail("the impair knob is too long (at most %d characters)", (int)sizeof(impair) - 1); return 0; }
+	if (rc > 0) {
 		if (vnet_impair_parse(impair, &cfg.impair) < 0) {
 			optfail("the impairment knob \"%s\" is not a vnet impairment spec", impair);
 			return 0;
