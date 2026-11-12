@@ -1062,9 +1062,11 @@ int mmulti_vnet_sendpending(void)
 	return 0;
 }
 
-// Put whatever sendpacket() queued on the wire now, ignoring the 25 ms PAKRATE window. Only for
-// a browser tab that is hidden (it has no next frame to come back for); native builds and
-// visible tabs keep the limit. Changes when a datagram goes, not what is in it.
+// Put whatever sendpacket() queued on the wire now, ignoring the 25 ms PAKRATE window, for every
+// peer (relay or plain UDP). Called by the game once per hidden-tab pass (brief 04) and right
+// after it queues a new input or the master's combined packet (brief 04b): datagrams that carry
+// only acknowledgements or resends still go at most once per window. Changes when a datagram
+// goes, not what is in it.
 void dosendpackets (int other);
 // Test-only timing hooks (brief 04b, -testlag): NULL unless the game sets them. Observation only.
 void (*mmulti_test_queuehook)(int other, int ocnt) = 0;
