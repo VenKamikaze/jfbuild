@@ -122,6 +122,13 @@ int mmulti_vnet_sendpending(void);
 // Send it now, ignoring that limit (once per hidden-tab pass; returns how many peers). Defined in mmulti.c.
 int mmulti_vnet_flush(void);
 
+// Test-only (brief 04b, the game's -testlag): called when sendpacket() queues a packet (ocnt is its
+// index in the peer's output queue) and when a datagram to a peer goes out (ocnt1: queue index one
+// past the newest packet, nbytes: the datagram's size). NULL unless the game sets them; they only
+// observe. Defined in mmulti.c.
+extern void (*mmulti_test_queuehook)(int other, int ocnt);
+extern void (*mmulti_test_sendhook)(int other, int ocnt1, int nbytes);
+
 #ifdef __cplusplus
 }
 #endif

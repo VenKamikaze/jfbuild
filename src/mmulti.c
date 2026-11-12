@@ -1066,6 +1066,9 @@ int mmulti_vnet_sendpending(void)
 // a browser tab that is hidden (it has no next frame to come back for); native builds and
 // visible tabs keep the limit. Changes when a datagram goes, not what is in it.
 void dosendpackets (int other);
+// Test-only timing hooks (brief 04b, -testlag): NULL unless the game sets them. Observation only.
+void (*mmulti_test_queuehook)(int other, int ocnt) = 0;
+void (*mmulti_test_sendhook)(int other, int ocnt1, int nbytes) = 0;
 int mmulti_vnet_flush(void)
 {
 	int i, n = 0;
@@ -1124,6 +1127,7 @@ void dosendpackets (int other)
 	*(unsigned short *)&pakbuf[0] = (unsigned short)k;
 	*(unsigned short *)&pakbuf[k] = getcrc16(pakbuf,k); k += 2;
 	netsend(other,pakbuf,k);
+	if (mmulti_test_sendhook) mmulti_test_sendhook(other,ocnt1[other],k);
 }
 
 void sendpacket (int other, unsigned char *bufptr, int messleng)
@@ -1131,6 +1135,7 @@ void sendpacket (int other, unsigned char *bufptr, int messleng)
 	if (numplayers < 2) return;
 
 	if (pakmemi+messleng+2 > (int)sizeof(pakmem)) pakmemi = 1;
+	if (mmulti_test_queuehook) mmulti_test_queuehook(other,ocnt1[other]);
 	opak[other][ocnt1[other]&(FIFSIZ-1)] = pakmemi;
 	*(short *)&pakmem[pakmemi] = messleng;
 	memcpy(&pakmem[pakmemi+2],bufptr,messleng); pakmemi += messleng+2;
