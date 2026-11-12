@@ -118,6 +118,10 @@ int jfbuild_browser_hidden_netgame(void)
 {
 	return mmulti_vnet_active() && jfbuild_browser_hidden();
 }
+// For the tests: how many pictures the game asked to present (Module.jfswShowframes, only if the page set it).
+EM_JS(void, jfbuild_browser_count_frame, (void), {
+	if (Module.jfswShowframes !== undefined) Module.jfswShowframes++;
+});
 EM_JS(void, jfbuild_browser_wake, (void), {
 	if (!Module.jfswChan) {
 		var ch = new MessageChannel();
@@ -1192,9 +1196,7 @@ const char *getdisplayname(int display)
 void showframe(void)
 {
 #ifdef __EMSCRIPTEN__
-	// A hidden tab in a network game: nobody sees the picture, so no upload, no present
-	// and no yield (handleevents() waits for the next network event instead).
-	if (jfbuild_browser_hidden_netgame()) return;
+	jfbuild_browser_count_frame();
 #endif
 #if USE_OPENGL
 	if (!glunavailable) {
