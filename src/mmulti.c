@@ -1062,6 +1062,22 @@ int mmulti_vnet_sendpending(void)
 	return 0;
 }
 
+// Put whatever sendpacket() queued on the wire now, ignoring the 25 ms PAKRATE window. Only for
+// a browser tab that is hidden (it has no next frame to come back for); native builds and
+// visible tabs keep the limit. Changes when a datagram goes, not what is in it.
+void dosendpackets (int other);
+int mmulti_vnet_flush(void)
+{
+	int i, n = 0;
+	for (i = 0; i < MAXPLAYERS; i++) {
+		if (!unsent[i] || otherhost[i].ss_family == AF_UNSPEC) continue;
+		lastsendtims[i] = GetTickCount() - 1000/PAKRATE - 1;
+		dosendpackets(i);
+		n++;
+	}
+	return n;
+}
+
 void dosendpackets (int other)
 {
 	int i, j, k;

@@ -117,8 +117,10 @@ int mmulti_vnet_cycle(int isslave, int silent_ms);
 
 // Has mmulti queued data (sendpacket) that its send-rate limit (one datagram per peer every
 // 25 ms, PAKRATE) has not let out yet? A browser tab that is hidden has no frames to come
-// back for, so while this is 1 the game asks for another pass at once. (Defined in mmulti.c.)
+// back for, so a hidden pass flushes it (mmulti_vnet_flush). (Defined in mmulti.c.)
 int mmulti_vnet_sendpending(void);
+// Send it now, ignoring that limit (once per hidden-tab pass; returns how many peers). Defined in mmulti.c.
+int mmulti_vnet_flush(void);
 
 #ifdef __cplusplus
 }
