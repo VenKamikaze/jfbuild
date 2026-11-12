@@ -108,7 +108,7 @@ EM_JS(void, jfbuild_browser_message, (const char *title, const char *text), {
 // instead: the vnet wake callback (mmulti_vnet.c) calls jfbuild_browser_wake(), which posts a
 // message on a MessageChannel (messages are not throttled; timers and
 // emscripten_async_call, which is a timer, are) and the handler resumes the game if it is
-// waiting in a hidden yield A timer tick (and the page becoming visible) resumes it too, for
+// waiting in a hidden yield. A timer tick (and the page becoming visible) resumes it too, for
 // vnet's own deadlines, which are not events. A hidden single player game still pauses as
 // before. The wake is ignored while the tab is visible (animation frames drive it then).
 EM_JS(int, jfbuild_browser_hidden, (void), {
