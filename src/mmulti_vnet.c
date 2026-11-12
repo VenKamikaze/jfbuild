@@ -26,8 +26,13 @@
 
 #include "compat.h"
 #include "build.h"
+#include "baselayer.h"
 #include "mmulti.h"
 #include "mmulti_vnet.h"
+
+#ifdef __EMSCRIPTEN__
+# include <emscripten.h>
+#endif
 
 #define printf buildprintf
 
@@ -195,11 +200,20 @@ int mmulti_vnet_setopt(int argc, char const * const argv[], int i)
 	val = argv[i+1];
 
 	if (isoptname(argv[i], "relay")) {
+#ifdef __EMSCRIPTEN__
+		// In the browser the relay is reached over WebSocket (and WebTransport, which
+		// vnet derives from a wss:// URL): a UDP address means nothing here.
+		if (strncmp(val, "ws://", 5) && strncmp(val, "wss://", 6)) {
+			return optfail("-relay wants the relay's WebSocket URL in the browser (wss://HOST/vnet, "
+				"or ws://HOST:PORT/vnet for a local one), not %s", val);
+		}
+#else
 		if (!strncmp(val, "udp://", 6)) val += 6;
 		if (strstr(val, "://")) {
 			return optfail("-relay wants the relay's UDP address (HOST:PORT), not the URL %s: "
 				"ws:// and wss:// are for the browser build", val);
 		}
+#endif
 		if (strlen(val) >= sizeof(optrelay)) return optfail("-relay value too long");
 		strcpy(optrelay, val);
 		sawrelay = 1;
@@ -232,7 +246,16 @@ int mmulti_vnet_setopt(int argc, char const * const argv[], int i)
 
 int mmulti_vnet_checkopts(void)
 {
-	if (!sawrelay && !sawroom && !sawhost) { wantedflag = 0; return 0; }
+	if (!sawrelay && !sawroom && !sawhost) {
+		wantedflag = 0;
+#ifdef __EMSCRIPTEN__
+		// The browser has no sockets, so plain -net (UDP) cannot work: say so, and
+		// let the game exit (as for any other bad -relay) rather than start single player.
+		return optfail("a network game in the browser needs a relay: -net -relay wss://HOST/vnet "
+			"-host-room N (or -room CODE); plain -net needs UDP, which a browser does not have");
+#endif
+		return 0;
+	}
 	if (!sawrelay) {
 		return optfail("-room and -host-room need -relay HOST:PORT");
 	}
@@ -273,16 +296,68 @@ static const char *describe(int code)
 
 static void atexit_close(void) { mmulti_vnet_close(); }
 
+#ifdef __EMSCRIPTEN__
+// Test-only knobs, handed over by the page (web/jfsw.js) in Module.jfswKnobs, which
+// the page fills only on a ?test=1 page: relay_wt (an explicit WebTransport URL),
+// relay_cert (the SHA-256 of a relay development certificate, hex) and impair (a
+// vnet impairment spec, with its own seed). Returns the length (0: not given).
+EM_JS(int, jfbuild_browser_knob, (const char *name, char *out, int cap), {
+	var k = Module.jfswKnobs;
+	var v = k ? k[UTF8ToString(name)] : 0;
+	if (!v) return 0;
+	var str = String(v);
+	stringToUTF8(str, out, cap);
+	return Math.min(lengthBytesUTF8(str), cap - 1);
+});
+
+// vnet_config.wake: called from the browser event that queued a datagram or changed
+// the transport's state. It may not call vnet. It lets a hidden tab, whose timers run
+// at about 1 Hz and whose animation frames stop, run the game from network events
+// (see jfbuild_browser_wake in sdlayer2.c).
+static void onwake(void *user)
+{
+	(void)user;
+	jfbuild_browser_wake();
+}
+#endif
+
 int mmulti_vnet_open(int port)
 {
 	vnet_config cfg;
+	int err = 0;
+#ifdef __EMSCRIPTEN__
+	char wt[300], cert[100], impair[200];
+	const char *used[3];
+	int nused = 0;
+#else
 	vnet_addr relay;
-	char hostport[300], numeric[128];
-	int err = 0, rc;
+	char hostport[300];
+	int rc;
 	const char *colon;
+#endif
+	char numeric[300];
 
 	if (!wantedflag) return 0;
 
+	vnet_config_init(&cfg);
+	cfg.backend = VNET_BACKEND_RELAY_AUTO;
+
+#ifdef __EMSCRIPTEN__
+	// A WebSocket URL (vnet derives the WebTransport one from a wss:// URL unless
+	// told otherwise; AUTO tries WebTransport first and falls back to WebSocket).
+	snprintf(numeric, sizeof(numeric), "%s", optrelay);
+	cfg.relay = numeric;
+	if (jfbuild_browser_knob("relay_wt", wt, sizeof(wt)) > 0) { cfg.relay_wt = wt; used[nused++] = "relay_wt"; }
+	if (jfbuild_browser_knob("relay_cert", cert, sizeof(cert)) > 0) { cfg.relay_cert_sha256 = cert; used[nused++] = "relay_cert"; }
+	if (jfbuild_browser_knob("impair", impair, sizeof(impair)) > 0) {
+		if (vnet_impair_parse(impair, &cfg.impair) < 0) {
+			optfail("the impairment knob \"%s\" is not a vnet impairment spec", impair);
+			return 0;
+		}
+		used[nused++] = "impair";
+	}
+	cfg.wake = onwake;
+#else
 	// The relay's address: numeric, so that vnet_create does not block.
 	colon = strrchr(optrelay, ':');
 	if (!colon || strchr(colon, ']'))
@@ -294,10 +369,9 @@ int mmulti_vnet_open(int port)
 		optfail("cannot resolve relay host %s (%s)", hostport, vnet_strerror(rc < 0 ? rc : VNET_EINVAL));
 		return 0;
 	}
-
-	vnet_config_init(&cfg);
-	cfg.backend = VNET_BACKEND_RELAY_AUTO;
 	cfg.relay_udp = numeric;
+#endif
+
 	cfg.room = optroom[0] ? optroom : NULL;
 	cfg.relay_timeout_ms = 10000;
 	cfg.keepalive_ms = 1000;
@@ -323,6 +397,14 @@ int mmulti_vnet_open(int port)
 		printf("mmulti: joining room %s on relay %s (vnet %s)\n", optroom, numeric, vnet_version());
 	else
 		printf("mmulti: creating a room on relay %s (vnet %s)\n", numeric, vnet_version());
+#ifdef __EMSCRIPTEN__
+	if (nused) {
+		int k;
+		printf("mmulti: test knobs in use:");
+		for (k = 0; k < nused; k++) printf(" %s", used[k]);
+		printf("\n");
+	}
+#endif
 	return 1;
 }
 

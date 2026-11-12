@@ -129,6 +129,43 @@ void netuninit (void)
 	domain = PF_UNSPEC;
 }
 
+#ifdef __EMSCRIPTEN__
+// The browser has no BSD sockets: the only network there is a vnet relay
+// (mmulti_vnet.c), reached through -relay. The plain UDP code below is left
+// out. (mmulti_vnet_checkopts() has already refused a -net without -relay.)
+int netinit (int portnum)
+{
+	if (mmulti_vnet_wanted()) {
+		domain = PF_INET;
+		if (mmulti_vnet_open(portnum)) return 1;
+		domain = PF_UNSPEC;
+	}
+	return 0;
+}
+
+int netsend (int other, void *dabuf, int bufsiz)
+{
+	if (otherhost[other].ss_family == AF_UNSPEC) return(0);
+	if (mmulti_vnet_active()) return mmulti_vnet_send(&otherhost[other], dabuf, bufsiz);
+	return 0;
+}
+
+int netread (int *other, void *dabuf, int bufsiz)
+{
+	int i;
+
+	if (!mmulti_vnet_active()) return 0;
+	if (mmulti_vnet_recv(dabuf, bufsiz, &snatchhost) <= 0) return 0;
+	memset(&snatchreplyfrom4, 0, sizeof(snatchreplyfrom4));
+	memset(&snatchreplyfrom6, 0, sizeof(snatchreplyfrom6));
+	(*other) = myconnectindex;
+	for(i=0;i<MAXPLAYERS;i++) {
+		if (issameaddress((struct sockaddr *)&snatchhost, (struct sockaddr *)&otherhost[i]))
+			{ (*other) = i; break; }
+	}
+	return 1;
+}
+#else // plain UDP (and the relay) for the native builds
 int netinit (int portnum)
 {
 #ifdef _WIN32
@@ -536,6 +573,7 @@ int netread (int *other, void *dabuf, int bufsiz) //0:no packets in buffer
 
 	return(1);
 }
+#endif // __EMSCRIPTEN__
 
 static int issameaddress(struct sockaddr *a, struct sockaddr *b) {
 	if (a->sa_family != b->sa_family) {

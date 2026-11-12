@@ -29,6 +29,7 @@
 #include "pragmas.h"
 #include "a.h"
 #include "osd.h"
+#include "mmulti_vnet.h"
 #include "glbuild_priv.h"
 
 #if defined(__APPLE__)
@@ -101,15 +102,59 @@ static void loadappicon(void);
 EM_JS(void, jfbuild_browser_message, (const char *title, const char *text), {
 	if (Module.jfswMessage) Module.jfswMessage(UTF8ToString(title), UTF8ToString(text));
 });
+// A hidden tab (brief 04). The browser stops animation frames there and runs timers at about
+// 1 Hz, which would hold a lockstep game back to a crawl and make every other player wait.
+// In a network game (a relay session exists) a hidden tab is driven by network events
+// instead: the vnet wake callback (mmulti_vnet.c) calls jfbuild_browser_wake(), which posts a
+// message on a MessageChannel (messages are not throttled; timers and
+// emscripten_async_call, which is a timer, are) and the handler resumes the game if it is
+// waiting in a hidden yield. A timer tick (and the page becoming visible) resumes it too, for
+// vnet's own deadlines, which are not events. A hidden single player game still pauses as
+// before. The wake is ignored while the tab is visible (animation frames drive it then).
+EM_JS(int, jfbuild_browser_hidden, (void), {
+	return (typeof document !== 'undefined' && document.hidden) ? 1 : 0;
+});
+int jfbuild_browser_hidden_netgame(void)
+{
+	return mmulti_vnet_active() && jfbuild_browser_hidden();
+}
+EM_JS(void, jfbuild_browser_wake, (void), {
+	if (!Module.jfswChan) {
+		var ch = new MessageChannel();
+		ch.port1.onmessage = function () {
+			Module.jfswWakeQueued = false;
+			var d = Module.jfswPending;
+			if (d) d(1);
+		};
+		Module.jfswChan = ch;
+		document.addEventListener('visibilitychange', function () {
+			var d = Module.jfswPending;
+			if (d) d(2);
+		});
+	}
+	if (Module.jfswWakes !== undefined) Module.jfswWakes++;
+	if (!Module.jfswWakeQueued) {
+		Module.jfswWakeQueued = true;
+		Module.jfswChan.port2.postMessage(0);
+	}
+});
 #ifndef JFBUILD_NO_ASYNCIFY   // (only for measuring what ASYNCIFY costs: a build that never yields)
-EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe), {
+EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe, int hidden), {
 	var enter = performance.now();
-	if (toframe && Module.jfswFrameLog) Module.jfswFrameLog.push(enter);
+	if (toframe && !hidden && Module.jfswFrameLog) Module.jfswFrameLog.push(enter);
 	var woke = 0;
 	await new Promise(function (resolve) {
 		var timer = 0;
-		function done() { woke = performance.now(); clearTimeout(timer); resolve(); }
-		if (toframe) {
+		function done(why) {
+			woke = performance.now(); clearTimeout(timer); Module.jfswPending = null;
+			if (hidden && Module.jfswHiddenLog) Module.jfswHiddenLog.push(why || 0);
+			resolve();
+		}
+		if (hidden) {
+			// Hidden tab in a network game: a network event (wake), the page becoming visible, or a timer tick.
+			Module.jfswPending = done;
+			timer = setTimeout(done, 250);
+		} else if (toframe) {
 			timer = setTimeout(done, 100);
 			requestAnimationFrame(done);
 		} else {
@@ -122,7 +167,7 @@ EM_ASYNC_JS(void, jfbuild_browser_yield, (int toframe), {
 static Uint32 browserlastyield = 0;
 static void browser_yield(int toframe)
 {
-	jfbuild_browser_yield(toframe);
+	jfbuild_browser_yield(toframe, jfbuild_browser_hidden_netgame());
 	browserlastyield = SDL_GetTicks();
 }
 #else
@@ -1146,6 +1191,11 @@ const char *getdisplayname(int display)
 //
 void showframe(void)
 {
+#ifdef __EMSCRIPTEN__
+	// A hidden tab in a network game: nobody sees the picture, so no upload, no present
+	// and no yield (handleevents() waits for the next network event instead).
+	if (jfbuild_browser_hidden_netgame()) return;
+#endif
 #if USE_OPENGL
 	if (!glunavailable) {
 		if (bpp == 8) {
@@ -1353,7 +1403,9 @@ int handleevents(void)
 #ifdef __EMSCRIPTEN__
 	// Loops that wait without drawing (menus' delays, the intro movie, waiting for
 	// players) get here without passing showframe(): give the browser a turn.
-	if (SDL_GetTicks() - browserlastyield >= 8) browser_yield(0);
+	// A hidden tab in a network game waits for the next network event instead (every call:
+	// the loops that get here have nothing to do until something arrives).
+	if (SDL_GetTicks() - browserlastyield >= 8 || jfbuild_browser_hidden_netgame()) browser_yield(0);
 #endif
 
 	while (SDL_PollEvent(&ev)) {
