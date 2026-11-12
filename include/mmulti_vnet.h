@@ -116,12 +116,12 @@ int mmulti_vnet_recv(void *buf, int cap, struct sockaddr_storage *from);
 int mmulti_vnet_cycle(int isslave, int silent_ms);
 
 // Has mmulti queued data (sendpacket) that its send-rate limit (one datagram per peer every
-// 25 ms, PAKRATE) has not let out yet? A browser tab that is hidden has no frames to come
-// back for, so a hidden pass flushes it (mmulti_vnet_flush). (Defined in mmulti.c.)
+// 25 ms, PAKRATE) has not let out yet? (The browser's hidden-tab test counts yields entered
+// with data held back.) Defined in mmulti.c.
 int mmulti_vnet_sendpending(void);
 // Send it now, ignoring that limit; returns how many peers. Not specific to vnet: it works for
-// plain UDP peers too. The game calls it once per hidden-tab pass (brief 04) and right after it
-// hands mmulti a new input or the master's combined packet (brief 04b), so an input does not
+// plain UDP peers too. The game calls it right after it hands mmulti a new input or the master's
+// combined packet (brief 04b; brief 04 called it once per hidden-tab pass), so an input does not
 // wait for the next window. Defined in mmulti.c.
 int mmulti_vnet_flush(void);
 
