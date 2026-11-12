@@ -174,9 +174,10 @@ ifeq ($(PLATFORM),DARWIN)
 	ENGINEOBJS+= $(SRC)/osxbits.$o
 endif
 ifeq ($(PLATFORM),EMSCRIPTEN)
-	# No BSD sockets in the browser: single player only (mmulti_null.c) until
-	# the vnet-backed mmulti is built for it.
-	ENGINEOBJS:=$(filter-out $(SRC)/mmulti.$o,$(ENGINEOBJS)) $(SRC)/mmulti_null.$o
+	# The browser has no BSD sockets: mmulti.c compiles its plain UDP code out
+	# (__EMSCRIPTEN__) and only relay games exist, through mmulti_vnet.c and
+	# vnet's WebSocket / WebTransport transports (both already in ENGINEOBJS
+	# above). -lwebsocket.js is added at link time (Makefile.emscripten).
 endif
 
 # Select the system layer
@@ -218,7 +219,9 @@ libs: enginelib editorlib
 enginelib: $(ENGINELIB)
 editorlib: $(EDITORLIB)
 
+# (ar rc keeps members that are no longer built, such as mmulti_null.o before brief 04: start afresh)
 $(ENGINELIB): $(ENGINEOBJS)
+	-rm -f $@
 	$(AR) rc $@ $^
 	$(RANLIB) $@
 

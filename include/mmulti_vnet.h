@@ -115,6 +115,13 @@ int mmulti_vnet_recv(void *buf, int cap, struct sockaddr_storage *from);
 // FAILED (a slave also fails here when its host stays silent too long).
 int mmulti_vnet_cycle(int isslave, int silent_ms);
 
+// Has mmulti queued data (sendpacket) that its send-rate limit (one datagram per peer every
+// 25 ms, PAKRATE) has not let out yet? A browser tab that is hidden has no frames to come
+// back for, so a hidden pass flushes it (mmulti_vnet_flush). (Defined in mmulti.c.)
+int mmulti_vnet_sendpending(void);
+// Send it now, ignoring that limit (once per hidden-tab pass; returns how many peers). Defined in mmulti.c.
+int mmulti_vnet_flush(void);
+
 #ifdef __cplusplus
 }
 #endif

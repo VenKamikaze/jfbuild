@@ -62,6 +62,17 @@ void debugprintf(const char *,...) PRINTF_FORMAT(1, 2);
 
 int handleevents(void);
 
+#ifdef __EMSCRIPTEN__
+// Browser build (sdlayer2.c). A hidden tab has no animation frames and runs timers at about
+// 1 Hz, so a network game there is driven from network events instead.
+//   jfbuild_browser_hidden_netgame()  1 when the page is hidden and a relay session exists
+//                                     (a hidden single player game still pauses)
+//   jfbuild_browser_wake()            the vnet wake callback's work: resume the game if it is
+//                                     waiting in a yield. Safe to call from a browser event.
+int jfbuild_browser_hidden_netgame(void);
+void jfbuild_browser_wake(void);
+#endif
+
 int initinput(void);
 void uninitinput(void);
 void releaseallbuttons(void);

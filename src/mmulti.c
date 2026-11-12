@@ -106,6 +106,7 @@ static struct sockaddr_storage otherhost[MAXPLAYERS], snatchhost;	// IPV4/6 addr
 static struct in_addr replyfrom4[MAXPLAYERS], snatchreplyfrom4;		// our IPV4 address peers expect to hear from us on
 static struct in6_addr replyfrom6[MAXPLAYERS], snatchreplyfrom6;	// our IPV6 address peers expect to hear from us on
 static int netready = 0;
+static int unsent[MAXPLAYERS];	// sendpacket()ed data that dosendpackets() has not put on the wire yet (PAKRATE holds it back)
 
 static int lookuphost(const char *name, struct sockaddr *host, int warnifmany);
 static int issameaddress(struct sockaddr *a, struct sockaddr *b);
@@ -129,6 +130,44 @@ void netuninit (void)
 	domain = PF_UNSPEC;
 }
 
+#ifdef __EMSCRIPTEN__
+// The browser has no BSD sockets: the only network there is a vnet relay
+// (mmulti_vnet.c), reached through -relay. The plain UDP code below is left
+// out. (mmulti_vnet_checkopts() has already refused a -net without -relay,
+// with or without vnet built in.)
+int netinit (int portnum)
+{
+	if (mmulti_vnet_wanted()) {
+		domain = PF_INET;
+		if (mmulti_vnet_open(portnum)) return 1;
+		domain = PF_UNSPEC;
+	}
+	return 0;
+}
+
+int netsend (int other, void *dabuf, int bufsiz)
+{
+	if (otherhost[other].ss_family == AF_UNSPEC) return(0);
+	if (mmulti_vnet_active()) return mmulti_vnet_send(&otherhost[other], dabuf, bufsiz);
+	return 0;
+}
+
+int netread (int *other, void *dabuf, int bufsiz)
+{
+	int i;
+
+	if (!mmulti_vnet_active()) return 0;
+	if (mmulti_vnet_recv(dabuf, bufsiz, &snatchhost) <= 0) return 0;
+	memset(&snatchreplyfrom4, 0, sizeof(snatchreplyfrom4));
+	memset(&snatchreplyfrom6, 0, sizeof(snatchreplyfrom6));
+	(*other) = myconnectindex;
+	for(i=0;i<MAXPLAYERS;i++) {
+		if (issameaddress((struct sockaddr *)&snatchhost, (struct sockaddr *)&otherhost[i]))
+			{ (*other) = i; break; }
+	}
+	return 1;
+}
+#else // plain UDP (and the relay) for the native builds
 int netinit (int portnum)
 {
 #ifdef _WIN32
@@ -536,6 +575,7 @@ int netread (int *other, void *dabuf, int bufsiz) //0:no packets in buffer
 
 	return(1);
 }
+#endif // __EMSCRIPTEN__
 
 static int issameaddress(struct sockaddr *a, struct sockaddr *b) {
 	if (a->sa_family != b->sa_family) {
@@ -1013,6 +1053,31 @@ static int lookuphost(const char *name, struct sockaddr *host, int warnifmany)
 	return found;
 }
 
+// Is something waiting for dosendpackets()'s 25 ms window? (A hidden browser tab keeps running
+// passes until it has gone out: see mmulti_vnet.h.)
+int mmulti_vnet_sendpending(void)
+{
+	int i;
+	for (i = 0; i < MAXPLAYERS; i++) if (unsent[i] && otherhost[i].ss_family != AF_UNSPEC) return 1;
+	return 0;
+}
+
+// Put whatever sendpacket() queued on the wire now, ignoring the 25 ms PAKRATE window. Only for
+// a browser tab that is hidden (it has no next frame to come back for); native builds and
+// visible tabs keep the limit. Changes when a datagram goes, not what is in it.
+void dosendpackets (int other);
+int mmulti_vnet_flush(void)
+{
+	int i, n = 0;
+	for (i = 0; i < MAXPLAYERS; i++) {
+		if (!unsent[i] || otherhost[i].ss_family == AF_UNSPEC) continue;
+		lastsendtims[i] = GetTickCount() - 1000/PAKRATE - 1;
+		dosendpackets(i);
+		n++;
+	}
+	return n;
+}
+
 void dosendpackets (int other)
 {
 	int i, j, k;
@@ -1035,6 +1100,7 @@ void dosendpackets (int other)
 	if (tims < lastsendtims[other]) lastsendtims[other] = tims;
 	if (tims < lastsendtims[other]+1000/PAKRATE) return;
 	lastsendtims[other] = tims;
+	unsent[other] = 0;
 
 	k = 2;
 	*(int *)&pakbuf[k] = icnt0[other]; k += 4;
@@ -1069,6 +1135,7 @@ void sendpacket (int other, unsigned char *bufptr, int messleng)
 	*(short *)&pakmem[pakmemi] = messleng;
 	memcpy(&pakmem[pakmemi+2],bufptr,messleng); pakmemi += messleng+2;
 	ocnt1[other]++;
+	unsent[other] = 1;
 
 	dosendpackets(other);
 }
