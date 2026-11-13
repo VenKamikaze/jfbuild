@@ -109,6 +109,7 @@ int mmulti_vnet_recv(void *buf, int cap, struct sockaddr_storage *from)
 	{ (void)buf; (void)cap; (void)from; return 0; }
 int mmulti_vnet_cycle(int isslave, int silent_ms)
 	{ (void)isslave; (void)silent_ms; return MMULTI_VNET_OFF; }
+void mmulti_vnet_notice(int what, int arg) { (void)what; (void)arg; }
 
 #else
 
@@ -516,6 +517,25 @@ int mmulti_vnet_cycle(int isslave, int silent_ms)
 		}
 	}
 	return state;
+}
+
+// A notice from the master (mmulti.c, relay games): the reason this slave's game ends.
+void mmulti_vnet_notice(int what, int arg)
+{
+	const char *why;
+
+	if (state == MMULTI_VNET_FAILED) return;
+	switch (what) {
+		case MMULTI_VNET_NOTE_FULL:    why = "the game is full: every place in it is taken"; break;
+		case MMULTI_VNET_NOTE_STARTED: why = "the game has already started (joining a game in progress is not possible)"; break;
+		case MMULTI_VNET_NOTE_CLOSED:  why = "the host left the room before the game started"; break;
+		case MMULTI_VNET_NOTE_LEFT:    why = "player %d left the game (their machine stopped answering)"; break;
+		default: return;
+	}
+	state = MMULTI_VNET_FAILED;
+	errcode = what == MMULTI_VNET_NOTE_FULL || what == MMULTI_VNET_NOTE_STARTED ? VNET_EROOMFULL : VNET_ECLOSED;
+	snprintf(errmsg, sizeof(errmsg), why, arg + 1);
+	printf("mmulti: %s\n", errmsg);
 }
 
 int mmulti_vnet_send(const struct sockaddr_storage *to, const void *buf, int len)
