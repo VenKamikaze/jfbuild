@@ -118,6 +118,8 @@ static void savesnatchhost(int other);
 static int lobbyjoined;		// players in the room, this machine included (master: counted; slave: the master's last answer)
 static int lobbyslots;		// the places being waited for (master: numplayers; slave: the master's last answer)
 static int lobbystartnow;	// master: the host asked to start with the players who are in
+static unsigned int mysid;	// relay games: this session's random id, in every ping (0xaa) this machine sends
+static unsigned int placesid[MAXPLAYERS];	// master: the session id of the player in each place
 static void lobbymaster(void);
 static int lobbycount(void);
 static void lobbyfree(int slot);
@@ -696,6 +698,7 @@ static void initmultiplayers_reset(void)
 	connecthead = 0;
 	numplayers = 1; myconnectindex = 0;
 	lobbyjoined = lobbyslots = lobbystartnow = 0;
+	memset(placesid, 0, sizeof(placesid));
 
 	memset(otherhost,0,sizeof(otherhost));
 }
@@ -789,6 +792,7 @@ int initmultiplayersparms(int argc, char const * const argv[])
 		}
 		danetmode = MMULTI_MODE_MS;
 		danumplayers = mmulti_vnet_hostplayers() ? mmulti_vnet_hostplayers() : 2;
+		mysid = mmulti_vnet_sessionid();
 		printf("mmulti: Master-slave mode, through a relay\n");
 	}
 
@@ -960,6 +964,9 @@ int initmultiplayerscycle(void)
 					k = 2;
 					*(int *)&pakbuf[k] = -1; k += 4;
 					pakbuf[k++] = 0xaa;
+					// relay games: this session's id. The relay gives a departed member's
+					// address to the next joiner, so the address alone does not say who it is.
+					if (mmulti_vnet_active()) { *(unsigned int *)&pakbuf[k] = mysid; k += 4; }
 					*(unsigned short *)&pakbuf[0] = (unsigned short)k;
 					*(unsigned short *)&pakbuf[k] = getcrc16(pakbuf,k); k += 2;
 					netsend(i,pakbuf,k);
@@ -1216,6 +1223,7 @@ int getpacket (int *retother, unsigned char *bufptr)
 				if (pakbuf[k] == 0xaa)
 				{
 					int sendother = -1;
+					unsigned int sid = (crc16ofs >= k+5) ? *(unsigned int *)&pakbuf[k+1] : 0;	// relay games
 #ifdef MMULTI_DEBUG_SENDRECV
 					const char *addr = presentaddress((struct sockaddr *)&snatchhost);
 #endif
@@ -1240,6 +1248,20 @@ int getpacket (int *retother, unsigned char *bufptr)
 							// (on plain UDP it gets no answer, as before).
 							if (sendother < 0 && mmulti_vnet_active())
 								lobbysend(&snatchhost, netready ? MMULTI_VNET_NOTE_STARTED : MMULTI_VNET_NOTE_FULL, 0);
+							if (sendother >= 0) placesid[sendother] = sid;
+						} else if (mmulti_vnet_active() && myconnectindex == connecthead && placesid[other] != sid) {
+							// Brief 05: another session at the address of the player in this place:
+							// the relay gave a departed member's address to a newcomer (a closed tab,
+							// a reload, a quit). Once the game has started it is refused, and the
+							// place is left alone (its silence ends the game: netlobby.c). During
+							// the wait the place's player has left the room, so the newcomer takes it.
+							if (netready) {
+								lobbysend(&snatchhost, MMULTI_VNET_NOTE_STARTED, 0);
+							} else {
+								printf("mmulti: a new player takes place %d (its player left the room)\n", other);
+								placesid[other] = sid;
+								sendother = other;
+							}
 						} else {
 							// Repeat back to them their position.
 #ifdef MMULTI_DEBUG_SENDRECV
@@ -1280,7 +1302,11 @@ int getpacket (int *retother, unsigned char *bufptr)
 						pakbuf[k++] = (char)netready;
 						// relay games: how many are in the room, for the joiner's lobby
 						// (a fifth byte, after the ones older code reads)
-						if (mmulti_vnet_active()) pakbuf[k++] = (char)lobbycount();
+						if (mmulti_vnet_active()) {
+							pakbuf[k++] = (char)lobbycount();
+							// and the session id the answer is for (the slave ignores another's)
+							*(unsigned int *)&pakbuf[k] = placesid[sendother]; k += 4;
+						}
 						*(unsigned short *)&pakbuf[0] = (unsigned short)k;
 						*(unsigned short *)&pakbuf[k] = getcrc16(pakbuf,k); k += 2;
 						netsend(sendother,pakbuf,k);
@@ -1292,7 +1318,12 @@ int getpacket (int *retother, unsigned char *bufptr)
 						// Master-slave.
 						if (((unsigned int)pakbuf[k+1] < (unsigned int)pakbuf[k+2]) &&
 							 ((unsigned int)pakbuf[k+2] < (unsigned int)MAXPLAYERS) &&
-							 other == connecthead)
+							 other == connecthead &&
+							 // relay games (brief 05): an answer meant for another session, or
+							 // one that arrives after the go-ahead (a late or reordered datagram
+							 // from before a "start now" or a renumbering) changes nothing
+							 !(mmulti_vnet_active() && (netready ||
+								(crc16ofs >= k+9 && *(unsigned int *)&pakbuf[k+5] != mysid))))
 						{
 #ifdef MMULTI_DEBUG_SENDRECV
 								debugprintf("mmulti debug: master gave us player %d in a %d player game\n",
@@ -1443,11 +1474,13 @@ static void lobbyfree(int slot)
 		lastrecvtims[j] = lastrecvtims[j+1];
 		prevlastrecvtims[j] = prevlastrecvtims[j+1];
 		playerslive[j] = playerslive[j+1];
+		placesid[j] = placesid[j+1];
 	}
 	j = numplayers-1;
 	memset(&otherhost[j], 0, sizeof(otherhost[j]));
 	lastrecvtims[j] = prevlastrecvtims[j] = 0;
 	playerslive[j] = 0;
+	placesid[j] = 0;
 }
 
 // Master: itself and every player in a place.
@@ -1479,6 +1512,11 @@ static void lobbymaster(void)
 	}
 	lobbyslots = numplayers;
 	lobbyjoined = n;	// the game shows it (src/netlobby.c)
+	if (lobbystartnow && n < 2) {
+		// the others left before everyone answered: the request is dropped (the lobby says so)
+		printf("mmulti: start now is cancelled: fewer than 2 players are in\n");
+		lobbystartnow = 0;
+	}
 	if (lobbystartnow && n >= 2 && n < numplayers && live) {
 		// Start now: the game has as many places as there are players. The slaves learn the
 		// count from the next answer to their pings, together with the go-ahead (netready),
@@ -1515,10 +1553,13 @@ int mmulti_vnet_startnow(void)
 {
 	if (!mmulti_vnet_active() || networkmode != MMULTI_MODE_MS || myconnectindex != connecthead || netready)
 		return 0;
-	if (!lobbystartnow) printf("mmulti: the host asked to start now (%d of %d players are in)\n", lobbyjoined, numplayers);
+	if (lobbycount() < 2) return 0;		// nothing to start: not remembered (brief 05 review N1)
+	if (!lobbystartnow) printf("mmulti: the host asked to start now (%d of %d players are in)\n", lobbycount(), numplayers);
 	lobbystartnow = 1;
-	return lobbyjoined >= 2;
+	return 1;
 }
+
+int mmulti_vnet_startpending(void) { return mmulti_vnet_active() && lobbystartnow && !netready; }
 
 void mmulti_vnet_leave(void)
 {

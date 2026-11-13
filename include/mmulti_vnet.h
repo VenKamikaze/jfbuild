@@ -91,8 +91,12 @@ int mmulti_vnet_lobbystarted(void);
 // game then has that many places; the slaves learn the count from the same
 // answer to their ping that gives them the go-ahead, so every machine starts
 // with the same count and the same player numbers. A newcomer after that is
-// told the game has already started. Returns 1 if at least 2 are in now.
+// told the game has already started. With fewer than 2 in nothing is
+// remembered and it returns 0; a request whose players drop below 2 before
+// it is met is dropped. Returns 1 if the request stands.
 int mmulti_vnet_startnow(void);
+// 1 while a "start now" waits for every player who is in to answer.
+int mmulti_vnet_startpending(void);
 
 // Leaving during the wait (Cancel): the master tells every slave the room is
 // closed; a slave tells the master it is leaving (its place is freed at once).
@@ -114,6 +118,13 @@ void mmulti_vnet_tellleft(int player);
 #define MMULTI_VNET_NOTE_LEFT     5   // master to the slaves: player arg left the game
 
 // ---- For mmulti.c only --------------------------------------------------
+
+// A random session id for this run's relay game (never 0). Every ping of a
+// slave carries it and the master's answer echoes it: the relay gives a
+// departed member's address to the next joiner, so mmulti tells sessions
+// apart by this id, not by the address (relay-protocol.md). Defined in
+// mmulti_vnet.c.
+unsigned int mmulti_vnet_sessionid(void);
 
 // A notice from the master reached this slave: fail with its reason
 // (mmulti_vnet_errormsg()). Defined in mmulti_vnet.c.

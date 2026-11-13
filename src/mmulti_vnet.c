@@ -110,6 +110,7 @@ int mmulti_vnet_recv(void *buf, int cap, struct sockaddr_storage *from)
 int mmulti_vnet_cycle(int isslave, int silent_ms)
 	{ (void)isslave; (void)silent_ms; return MMULTI_VNET_OFF; }
 void mmulti_vnet_notice(int what, int arg) { (void)what; (void)arg; }
+unsigned int mmulti_vnet_sessionid(void) { return 1; }
 
 #else
 
@@ -517,6 +518,42 @@ int mmulti_vnet_cycle(int isslave, int silent_ms)
 		}
 	}
 	return state;
+}
+
+#ifdef __EMSCRIPTEN__
+EM_JS(unsigned int, jfbuild_browser_random32, (void), {
+	var a = new Uint32Array(1);
+	crypto.getRandomValues(a);
+	return a[0];
+});
+#else
+# include <time.h>
+# ifndef _WIN32
+#  include <unistd.h>
+# endif
+#endif
+
+unsigned int mmulti_vnet_sessionid(void)
+{
+	unsigned int r = 0;
+#ifdef __EMSCRIPTEN__
+	r = jfbuild_browser_random32();
+#else
+	FILE *f = fopen("/dev/urandom", "rb");
+	if (f) {
+		if (fread(&r, sizeof(r), 1, f) != 1) r = 0;
+		fclose(f);
+	}
+	if (!r) {
+		// no /dev/urandom (Windows): the time, the clock and the process, mixed
+		r = (unsigned int)time(NULL) * 2654435761u ^ (unsigned int)clock() * 40503u;
+# ifndef _WIN32
+		r ^= (unsigned int)getpid() * 2246822519u;
+# endif
+		r ^= (unsigned int)(size_t)&r;
+	}
+#endif
+	return r ? r : 1;
 }
 
 // A notice from the master (mmulti.c, relay games): the reason this slave's game ends.
